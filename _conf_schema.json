@@ -1,0 +1,28 @@
+{
+    "legado": {
+        "description": "通用书源小说插件配置",
+        "type": "object",
+        "items": {
+            "site_url": {
+                "description": "目标网站 URL",
+                "type": "string",
+                "default": "http://3g.shugelou.org"
+            },
+            "find_url": {
+                "description": "分类页面 URL",
+                "type": "string",
+                "default": "http://3g.shugelou.org/fenlei.html"
+            },
+            "user_agent": {
+                "description": "浏览器 User-Agent",
+                "type": "text",
+                "default": "Mozilla/5.0 (Linux; Android 14; PJH110 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36"
+            },
+            "rules": {
+                "description": "书源解析规则 (JSON 格式)",
+                "type": "text",
+                "default": "{\n    \"ruleSearch\": {\n        \"author\": \"p@text##.*</a>\",\n        \"bookList\": \".cover p.line\",\n        \"bookUrl\": \"a@href\",\n        \"name\": \"a@text\"\n    },\n    \"ruleToc\": {\n        \"chapterList\": \".chapter li\",\n        \"chapterName\": \"a@text\",\n        \"chapterUrl\": \"a@href\"\n    },\n    \"ruleContent\": {\n        \"content\": \"id.nr1@html\",\n        \"nextContentUrl\": \"id.pt_next@href\",\n        \"replaceRegex\": \"(?:第[一二三四五六七八九十0-9]+章.*?\\\\(第\\\\d+/\\\\d+页\\\\))|(?:\\\\(本章未完，请点击下一页继续阅读\\\\))|(?:最新网址：3g\\\\.shugelou\\\\.org)|(?:每完成一次任务，系统就会给予宿主相应的奖励。)|(?:【.*?】)|(?:\\\\s*\\\\(第\\\\d+/\\\\d+页\\\\))\",\n        \"title\": \"id._bqgmb_h1@text\"\n    },\n    \"ruleFind\": {\n        \"findList\": \".content li\",\n        \"findName\": \"a@text\",\n        \"findUrl\": \"a@href\"\n    }\n}"
+            }
+        }
+    }
+}

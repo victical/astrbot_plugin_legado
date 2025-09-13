@@ -1,0 +1,6 @@
+name: astrbot_plugin_legado # 这是你的插件的唯一识别名。
+desc: 随机小说 # 插件简短描述
+help: 随机发送一本小说。 # 插件的帮助信息
+version: v0.0.1
+author: Victical # 作者
+repo: https://github.com/victical/astrbot_plugin_legado # 插件的仓库地址
