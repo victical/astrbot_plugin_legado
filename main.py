@@ -19,7 +19,7 @@ NOVEL_TEMPLATE = """
             background-color: #f9f9f9;
             margin: 0;
             padding: 10px; /* 减小 body 填充 */
-            width: 1200px;
+            width: 1280px;
             box-sizing: border-box; /* 确保 padding 包含在 width 内 */
         }
         .container {
