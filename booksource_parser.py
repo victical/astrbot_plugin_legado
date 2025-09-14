@@ -1,17 +1,14 @@
 import httpx
 import re
-import logging
 from bs4 import BeautifulSoup
 from typing import Dict, Any, Optional
-
-logger = logging.getLogger(__name__)
 
 class BookSourceParser:
     """
     通用书源解析器，兼容阅读APP书源格式。
     支持 ruleContent、ruleSearch、ruleToc、ruleBookInfo 等主流字段。
     """
-    def __init__(self, rule: Dict[str, Any], site_url: str, user_agent: str = None):
+    def __init__(self, rule: Dict[str, Any], site_url: str, user_agent: str = None, logger=None):
         self.rule = rule
         self.site_url = site_url
         self.headers = {
@@ -19,6 +16,7 @@ class BookSourceParser:
             "Referer": site_url
         }
         self.client = httpx.AsyncClient(headers=self.headers, timeout=10)
+        self.logger = logger  # 接收并保存 AstrBot 的 logger
 
     async def get_html(self, url: str, method: str = "GET", data: Optional[Dict] = None) -> str:
         headers = self.headers.copy()
@@ -31,10 +29,12 @@ class BookSourceParser:
             resp.raise_for_status()
             return resp.text
         except httpx.RequestError as e:
-            logger.warning(f"网络请求失败: {e}")
+            if self.logger:
+                self.logger.warning(f"网络请求失败: {e}")
             return ""
         except httpx.HTTPStatusError as e:
-            logger.warning(f"HTTP 状态错误: {e.response.status_code} - {e.response.text}")
+            if self.logger:
+                self.logger.warning(f"HTTP 状态错误: {e.response.status_code} - {e.response.text}")
             return ""
 
     def _resolve_url(self, relative_url: str) -> str:
@@ -205,5 +205,6 @@ class BookSourceParser:
             else:
                 return node.get(typ, "")
         else:
-            logger.debug(f"选择器 '{selector}' 未找到任何节点。")
+            if self.logger:
+                self.logger.debug(f"选择器 '{selector}' 未找到任何节点。")
         return ""
