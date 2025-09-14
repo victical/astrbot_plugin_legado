@@ -1,7 +1,10 @@
+import httpx
 import re
-import requests
+import logging
 from bs4 import BeautifulSoup
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 class BookSourceParser:
     """
@@ -15,19 +18,36 @@ class BookSourceParser:
             "User-Agent": "Mozilla/5.0 (Linux; Android 14; PJH110 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
             "Referer": site_url
         }
+        self.client = httpx.AsyncClient(headers=self.headers, timeout=10)
 
-    def get_html(self, url: str, method: str = "GET", data: Optional[Dict] = None) -> str:
+    async def get_html(self, url: str, method: str = "GET", data: Optional[Dict] = None) -> str:
         # 每次请求都自动加 Referer
         headers = self.headers.copy()
         headers["Referer"] = self.site_url
-        if method == "POST":
-            resp = requests.post(url, headers=headers, data=data, timeout=10)
-        else:
-            resp = requests.get(url, headers=headers, timeout=10)
-        resp.encoding = resp.apparent_encoding
-        return resp.text
+        try:
+            if method == "POST":
+                resp = await self.client.post(url, headers=headers, data=data)
+            else:
+                resp = await self.client.get(url, headers=headers)
+            resp.raise_for_status()  # 检查HTTP响应状态
+            resp.encoding = resp.apparent_encoding
+            return resp.text
+        except httpx.RequestError as e:
+            logger.warning(f"网络请求失败: {e}")
+            return ""
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"HTTP 状态错误: {e.response.status_code} - {e.response.text}")
+            return ""
 
-    def parse_content(self, chapter_url: str) -> Dict[str, Any]:
+    def _resolve_url(self, relative_url: str) -> str:
+        """
+        将相对 URL 解析为绝对 URL。
+        """
+        if relative_url and not relative_url.startswith("http"):
+            return self.site_url.rstrip("/") + "/" + relative_url.lstrip("/")
+        return relative_url
+
+    async def parse_content(self, chapter_url: str) -> Dict[str, Any]:
         """
         按 ruleContent 解析章节内容，自动处理分页、正则替换、标题。增加最大翻页次数限制。
         """
@@ -42,7 +62,7 @@ class BookSourceParser:
         max_pages = 3
         page_count = 0
         while url and page_count < max_pages:
-            html = self.get_html(url)
+            html = await self.get_html(url)
             soup = BeautifulSoup(html, "html.parser")
             # 内容
             if content_selector:
@@ -54,22 +74,20 @@ class BookSourceParser:
                 title = self._select(soup, title_selector)
             # 下一页
             next_url = self._select(soup, next_selector) if next_selector else None
-            if next_url and not next_url.startswith("http"):
-                next_url = self.site_url.rstrip("/") + "/" + next_url.lstrip("/")
-            url = next_url
+            url = self._resolve_url(next_url)
             page_count += 1
         # 内容清洗
         if replace_regex:
             content = re.sub(replace_regex, "", content)
         return {"title": title, "content": content.strip()}
 
-    def parse_search(self, search_url: str, key: str) -> list:
+    async def parse_search(self, search_url: str, key: str) -> list:
         """
         按 ruleSearch 解析搜索结果。
         """
         rule = self.rule.get("ruleSearch", {})
         url = search_url.replace("{{key}}", key)
-        html = self.get_html(url)
+        html = await self.get_html(url)
         soup = BeautifulSoup(html, "html.parser")
         book_list_selector = rule.get("bookList")
         book_list = []
@@ -85,17 +103,17 @@ class BookSourceParser:
                     "name": name,
                     "author": author,
                     "intro": intro,
-                    "book_url": book_url,
-                    "cover_url": cover_url
+                    "book_url": self._resolve_url(book_url),
+                    "cover_url": self._resolve_url(cover_url)
                 })
         return book_list
 
-    def parse_toc(self, toc_url: str) -> list:
+    async def parse_toc(self, toc_url: str) -> list:
         """
         按 ruleToc 解析目录。
         """
         rule = self.rule.get("ruleToc", {})
-        html = self.get_html(toc_url)
+        html = await self.get_html(toc_url)
         soup = BeautifulSoup(html, "html.parser")
         chapter_list_selector = rule.get("chapterList")
         chapters = []
@@ -104,27 +122,25 @@ class BookSourceParser:
             for item in items:
                 name = self._select(item, rule.get("chapterName"))
                 url = self._select(item, rule.get("chapterUrl"))
-                if url and not url.startswith("http"):
-                    url = self.site_url.rstrip("/") + "/" + url.lstrip("/")
-                chapters.append({"name": name, "url": url})
+                chapters.append({"name": name, "url": self._resolve_url(url)})
         return chapters
 
-    def parse_book_info(self, info_url: str) -> Dict[str, Any]:
+    async def parse_book_info(self, info_url: str) -> Dict[str, Any]:
         """
         按 ruleBookInfo 解析书籍信息。
         """
         rule = self.rule.get("ruleBookInfo", {})
-        html = self.get_html(info_url)
+        html = await self.get_html(info_url)
         soup = BeautifulSoup(html, "html.parser")
         intro = self._select(soup, rule.get("intro"))
         return {"intro": intro}
 
-    def parse_find(self, find_url: str) -> list:
+    async def parse_find(self, find_url: str) -> list:
         """
         按 ruleFind 解析分类列表。
         """
         rule = self.rule.get("ruleFind", {})
-        html = self.get_html(find_url)
+        html = await self.get_html(find_url)
         soup = BeautifulSoup(html, "html.parser")
         find_list_selector = rule.get("findList")
         finds = []
@@ -133,9 +149,7 @@ class BookSourceParser:
             for item in items:
                 name = self._select(item, rule.get("findName"))
                 url = self._select(item, rule.get("findUrl"))
-                if url and not url.startswith("http"):
-                    url = self.site_url.rstrip("/") + "/" + url.lstrip("/")
-                finds.append({"name": name, "url": url})
+                finds.append({"name": name, "url": self._resolve_url(url)})
         return finds
 
     def _select(self, soup, selector: str) -> str:
@@ -171,4 +185,6 @@ class BookSourceParser:
                 else:
                     # 支持 a@href 这种属性提取
                     return node.get(typ, "")
+            else:
+                logger.debug(f"选择器 '{selector}' 未找到任何节点。在 URL: {soup.prettify()}") # 添加日志，并打印部分HTML以便调试
         return ""

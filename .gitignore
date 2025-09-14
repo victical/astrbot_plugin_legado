@@ -1,0 +1,10 @@
+# 忽略Python字节码文件和缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 忽略虚拟环境
+venv/
+*.venv/
+env/
+*.env/

@@ -19,7 +19,7 @@ NOVEL_TEMPLATE = """
             background-color: #f9f9f9;
             margin: 0;
             padding: 10px; /* 减小 body 填充 */
-            width: 1200px;
+            width: 1280px;
             box-sizing: border-box; /* 确保 padding 包含在 width 内 */
         }
         .container {
@@ -98,61 +98,78 @@ class LegadoNovelPlugin(Star):
         self.parser = BookSourceParser(self.rule, self.site_url, self.user_agent)
         self.last_sent = None
 
-    def get_random_novel_chapter(self):
+    async def _get_random_category(self):
+        logger.info("开始获取小说分类...")
+        categories = await self.parser.parse_find(self.find_url)
+        if not categories:
+            logger.error("获取分类失败。")
+            return None
+        random_category = random.choice(categories)
+        logger.info(f"随机选择分类: {random_category['name']}")
+        return random_category
+
+    async def _get_random_book_from_category(self, category_url: str):
+        html = await self.parser.get_html(category_url)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        
+        rule_search = self.rule.get("ruleSearch", {})
+        book_list_selector = rule_search.get("bookList")
+        books = []
+        if book_list_selector:
+            items = soup.select(book_list_selector)
+            for item in items:
+                name = self.parser._select(item, rule_search.get("name"))
+                author = self.parser._select(item, rule_search.get("author")).strip("/")
+                book_url = self.parser._select(item, rule_search.get("bookUrl"))
+                if book_url and not book_url.startswith("http"):
+                    book_url = self.parser._resolve_url(book_url) # 使用封装的URL拼接方法
+                books.append({"name": name, "author": author, "url": book_url})
+        
+        if not books:
+            logger.error(f"在分类 '{category_url}' 下未找到任何小说。")
+            return None
+        random_book = random.choice(books)
+        logger.info(f"随机选择小说: {random_book['name']}")
+        return random_book
+
+    async def _get_first_chapter_from_book(self, book_url: str):
+        chapters = await self.parser.parse_toc(book_url)
+        if not chapters:
+            logger.error(f"获取小说 '{book_url}' 的章节列表失败。")
+            return None
+
+        first_chapter = None
+        import re
+        for chap in chapters:
+            if re.search(r"第[一1]章", chap["name"]):
+                first_chapter = chap
+                break
+        
+        if not first_chapter:
+            first_chapter = chapters[0]
+        
+        logger.info(f"找到第一章: {first_chapter['name']}")
+        return first_chapter
+
+    async def _get_chapter_content(self, chapter_url: str):
+        return await self.parser.parse_content(chapter_url)
+
+    async def get_random_novel_chapter(self):
         try:
-            logger.info("开始获取小说分类...")
-            categories = self.parser.parse_find(self.find_url)
-            if not categories:
-                logger.error("获取分类失败。")
+            random_category = await self._get_random_category()
+            if not random_category:
                 return None
 
-            random_category = random.choice(categories)
-            logger.info(f"随机选择分类: {random_category['name']}")
-
-            html = self.parser.get_html(random_category['url'])
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, "html.parser")
-            
-            rule_search = self.rule.get("ruleSearch", {})
-            book_list_selector = rule_search.get("bookList")
-            books = []
-            if book_list_selector:
-                items = soup.select(book_list_selector)
-                for item in items:
-                    name = self.parser._select(item, rule_search.get("name"))
-                    author = self.parser._select(item, rule_search.get("author")).strip("/")
-                    book_url = self.parser._select(item, rule_search.get("bookUrl"))
-                    if book_url and not book_url.startswith("http"):
-                        book_url = self.site_url.rstrip("/") + "/" + book_url.lstrip("/")
-                    books.append({"name": name, "author": author, "url": book_url})
-            
-            if not books:
-                logger.error(f"在分类 '{random_category['name']}' 下未找到任何小说。")
+            random_book = await self._get_random_book_from_category(random_category['url'])
+            if not random_book:
                 return None
 
-            random_book = random.choice(books)
-            logger.info(f"随机选择小说: {random_book['name']}")
-
-            chapters = self.parser.parse_toc(random_book['url'])
-            if not chapters:
-                logger.error(f"获取小说 '{random_book['name']}' 的章节列表失败。")
-                return None
-
-            first_chapter = None
-            # 尝试使用更灵活的正则表达式匹配“第一章”或“第1章”
-            import re
-            for chap in chapters:
-                if re.search(r"第[一1]章", chap["name"]):
-                    first_chapter = chap
-                    break
-            
-            # 如果仍然没有找到，则回退到列表的最后一个元素（通常是倒序列表的第一章）
+            first_chapter = await self._get_first_chapter_from_book(random_book['url'])
             if not first_chapter:
-                first_chapter = chapters[-1]
-            
-            logger.info(f"找到第一章: {first_chapter['name']}")
+                return None
 
-            chapter_content = self.parser.parse_content(first_chapter['url'])
+            chapter_content = await self._get_chapter_content(first_chapter['url'])
             
             return {
                 "name": random_book["name"],
@@ -169,7 +186,7 @@ class LegadoNovelPlugin(Star):
     async def random_novel(self, event: AstrMessageEvent, text: str = ""):
         '''随机发送一本小说第一章的图片'''
         yield event.plain_result("正在随机寻找一本小说，请稍候...") # 提供即时反馈
-        book_data = self.get_random_novel_chapter()
+        book_data = await self.get_random_novel_chapter()
         
         if not book_data:
             yield event.plain_result("获取小说失败，请稍后再试。")

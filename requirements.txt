@@ -1,3 +1,4 @@
 requests
 pillow
 beautifulsoup4
+httpx
