@@ -15,13 +15,12 @@ class BookSourceParser:
         self.rule = rule
         self.site_url = site_url
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 14; PJH110 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
+            "User-Agent": user_agent or "Mozilla/5.0 (Linux; Android 14; PJH110 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36",
             "Referer": site_url
         }
         self.client = httpx.AsyncClient(headers=self.headers, timeout=10)
 
     async def get_html(self, url: str, method: str = "GET", data: Optional[Dict] = None) -> str:
-        # 每次请求都自动加 Referer
         headers = self.headers.copy()
         headers["Referer"] = self.site_url
         try:
@@ -29,8 +28,7 @@ class BookSourceParser:
                 resp = await self.client.post(url, headers=headers, data=data)
             else:
                 resp = await self.client.get(url, headers=headers)
-            resp.raise_for_status()  # 检查HTTP响应状态
-            # httpx 会自动处理编码，无需手动设置 apparent_encoding
+            resp.raise_for_status()
             return resp.text
         except httpx.RequestError as e:
             logger.warning(f"网络请求失败: {e}")
@@ -64,19 +62,15 @@ class BookSourceParser:
         while url and page_count < max_pages:
             html = await self.get_html(url)
             soup = BeautifulSoup(html, "html.parser")
-            # 内容
             if content_selector:
                 part = self._select(soup, content_selector)
                 if part:
                     content += part
-            # 标题
             if title_selector and not title:
                 title = self._select(soup, title_selector)
-            # 下一页
             next_url = self._select(soup, next_selector) if next_selector else None
             url = self._resolve_url(next_url)
             page_count += 1
-        # 内容清洗
         if replace_regex:
             content = re.sub(replace_regex, "", content)
         return {"title": title, "content": content.strip()}
@@ -115,25 +109,42 @@ class BookSourceParser:
         rule = self.rule.get("ruleToc", {})
         html = await self.get_html(toc_url)
         soup = BeautifulSoup(html, "html.parser")
-        chapter_list_selector = rule.get("chapterList")
+        
+        all_chapter_lists = soup.select("ul.chapter")
+        
+        target_chapter_list = None
+        for chapter_list in all_chapter_lists:
+            prev_sibling = chapter_list.find_previous_sibling("div", class_="intro")
+            if prev_sibling and prev_sibling.get_text(strip=True) == "正文":
+                target_chapter_list = chapter_list
+                break
+        
         chapters = []
-        if chapter_list_selector:
-            items = soup.select(chapter_list_selector)
+        if target_chapter_list:
+            chapter_name_selector = rule.get("chapterName", "a@text")
+            chapter_url_selector = rule.get("chapterUrl", "a@href")
+            items = target_chapter_list.select("li")
             for item in items:
-                name = self._select(item, rule.get("chapterName"))
-                url = self._select(item, rule.get("chapterUrl"))
+                name = self._select(item, chapter_name_selector)
+                url = self._select(item, chapter_url_selector)
                 chapters.append({"name": name, "url": self._resolve_url(url)})
         return chapters
 
     async def parse_book_info(self, info_url: str) -> Dict[str, Any]:
         """
-        按 ruleBookInfo 解析书籍信息。
+        按 ruleBookInfo 解析书籍的详细信息。
         """
         rule = self.rule.get("ruleBookInfo", {})
+        if not rule:
+            return {}
         html = await self.get_html(info_url)
         soup = BeautifulSoup(html, "html.parser")
-        intro = self._select(soup, rule.get("intro"))
-        return {"intro": intro}
+        info = {}
+        for key, selector in rule.items():
+            value = self._select(soup, selector)
+            if value:
+                info[key] = value.strip()
+        return info
 
     async def parse_find(self, find_url: str) -> list:
         """
@@ -154,37 +165,45 @@ class BookSourceParser:
 
     def _select(self, soup, selector: str) -> str:
         """
-        支持 CSS 选择器（如 a > h2@text），a@href 属性提取，以及原有 id.xx@text、class.xx@html、tag@text。
+        支持 CSS 选择器、属性提取，以及 id.xx、class.xx 简写。
         """
         if not selector:
             return ""
-        # 支持正则清洗
+
         if "##" in selector:
             sel, regex = selector.split("##", 1)
             val = self._select(soup, sel)
             return re.sub(regex, "", val)
+
         parts = selector.split("@")
-        if len(parts) == 2:
-            sel, typ = parts
-            # 优先用 CSS 选择器
-            nodes = soup.select(sel)
-            node = nodes[0] if nodes else None
-            if not node:
-                # 回退到原有 find 逻辑
-                if sel.startswith("id."):
-                    node = soup.find(id=sel[3:])
-                elif sel.startswith("class."):
-                    node = soup.find(class_=sel[6:])
-                else:
-                    node = soup.find(sel)
-            if node:
-                if typ == "text":
-                    return node.get_text(strip=True)
-                elif typ == "html":
-                    return str(node)
-                else:
-                    # 支持 a@href 这种属性提取
-                    return node.get(typ, "")
+        sel = parts[0]
+        typ = parts[1] if len(parts) == 2 else "text"
+
+        if sel.startswith("id."):
+            sel = "#" + sel[3:]
+        elif sel.startswith("class."):
+            sel = "." + sel[6:]
+
+        contains_match = re.search(r':contains\((.*?)\)', sel)
+        contains_text = None
+        if contains_match:
+            contains_text = contains_match.group(1).strip("'\"")
+            sel = sel.replace(contains_match.group(0), "")
+
+        nodes = soup.select(sel)
+        
+        if contains_text:
+            nodes = [node for node in nodes if contains_text in node.get_text()]
+
+        node = nodes[0] if nodes else None
+
+        if node:
+            if typ == "text":
+                return node.get_text(strip=True)
+            elif typ == "html":
+                return str(node)
             else:
-                logger.debug(f"选择器 '{selector}' 未找到任何节点。在 URL: {soup.prettify()}") # 添加日志，并打印部分HTML以便调试
+                return node.get(typ, "")
+        else:
+            logger.debug(f"选择器 '{selector}' 未找到任何节点。")
         return ""
