@@ -54,7 +54,7 @@ NOVEL_TEMPLATE = """
 </html>
 """
 
-@register("astrbot_plugin_legado", "Victical", "通用书源小说插件", "0.0.1", "https://github.com/victical/astrbot_plugin_legado")
+@register("astrbot_plugin_legado", "Victical", "随机小说插件", "0.0.1", "https://github.com/victical/astrbot_plugin_legado")
 class LegadoNovelPlugin(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
