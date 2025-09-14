@@ -54,7 +54,7 @@ NOVEL_TEMPLATE = """
 </html>
 """
 
-@register("astrbot_plugin_legado", "Victical", "随机小说插件", "0.0.1", "https://github.com/victical/astrbot_plugin_legado")
+@register("astrbot_plugin_legado", "Victical", "随机小说插件", "0.0.2", "https://github.com/victical/astrbot_plugin_legado")
 class LegadoNovelPlugin(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
@@ -81,7 +81,8 @@ class LegadoNovelPlugin(Star):
             logger.error("解析书源规则失败，将使用默认规则。")
             self.rule = default_rules
 
-        self.parser = BookSourceParser(self.rule, self.site_url, self.user_agent)
+        # 在这里将 AstrBot 的 logger 传递给 BookSourceParser 实例
+        self.parser = BookSourceParser(self.rule, self.site_url, self.user_agent, logger=logger)
         self.last_sent = None
 
     async def _get_random_category(self):
