@@ -60,7 +60,6 @@ class LegadoNovelPlugin(Star):
         super().__init__(context)
         self.context = context
         
-        # 从配置加载，如果失败则使用默认值
         config = config or {}
         legado_config = config.get("legado", {})
         
@@ -68,12 +67,12 @@ class LegadoNovelPlugin(Star):
         self.find_url = legado_config.get("find_url", "http://3g.shugelou.org/fenlei.html")
         self.user_agent = legado_config.get("user_agent", "Mozilla/5.0 (Linux; Android 14; PJH110 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.103 Mobile Safari/537.36")
         
+        # 简化规则，我们现在只依赖列表页，不再需要复杂的 bookInfo 规则
         default_rules = {
-            "ruleSearch": {"author": "p@text##.*</a>", "bookList": ".cover p.line", "bookUrl": "a@href", "name": "a@text"},
+            "ruleSearch": {"bookList": ".cover p.line", "bookUrl": "a@href", "name": "a@text"},
             "ruleToc": {"chapterList": ".chapter li", "chapterName": "a@text", "chapterUrl": "a@href"},
             "ruleContent": {"content": "id.nr1@html##{{chapter.title}}.*|最新网址：3g\\.shugelou\\.org", "nextContentUrl": "id.pt_next@href", "replaceRegex": "（本章未完，请点击下一页继续阅读）\\n", "title": "id._bqgmb_h1@text"},
-            "ruleFind": {"findList": ".content li", "findName": "a@text", "findUrl": "a@href"},
-            "ruleBookInfo": {"intro": "div.intro@text"}
+            "ruleFind": {"findList": ".content li", "findName": "a@text", "findUrl": "a@href"}
         }
         
         try:
@@ -107,17 +106,38 @@ class LegadoNovelPlugin(Star):
             items = soup.select(book_list_selector)
             for item in items:
                 name = self.parser._select(item, rule_search.get("name"))
-                author = self.parser._select(item, rule_search.get("author")).strip("/")
                 book_url = self.parser._select(item, rule_search.get("bookUrl"))
+
+                # --- 核心修改：从列表项的完整文本中精确解析作者和分类 ---
+                full_text = item.get_text(strip=True)
+                info_str = full_text.replace(name, "").strip() # 移除书名，剩下 " [分类]/作者 "
+
+                author = "未知作者"
+                category = "未知分类"
+
+                # 1. 提取作者 (总是在'/'后面)
+                if '/' in info_str:
+                    author = info_str.split('/')[-1].strip()
+                
+                # 2. 提取分类 (总是在'[]'里面)
+                category_match = re.search(r"\[(.*?)\]", info_str)
+                if category_match:
+                    category = category_match.group(1).strip()
+                
+                # 3. 简单的备用逻辑：如果上面都没成功，但info_str有内容，就认为它是作者
+                if author == "未知作者" and info_str:
+                    author = re.sub(r"^[\[\]/\s]+", "", info_str) # 清理开头的特殊字符
+
                 if book_url and not book_url.startswith("http"):
-                    book_url = self.parser._resolve_url(book_url) # 使用封装的URL拼接方法
-                books.append({"name": name, "author": author, "url": book_url})
+                    book_url = self.parser._resolve_url(book_url)
+                
+                books.append({"name": name, "url": book_url, "author": author, "category": category})
         
         if not books:
             logger.error(f"在分类 '{category_url}' 下未找到任何小说。")
             return None
         random_book = random.choice(books)
-        logger.info(f"随机选择小说: {random_book['name']}")
+        logger.info(f"随机选择小说: {random_book['name']} (作者: {random_book['author']}, 分类: {random_book['category']})")
         return random_book
 
     async def _get_first_chapter_from_book(self, book_url: str):
@@ -125,11 +145,6 @@ class LegadoNovelPlugin(Star):
         if not chapters:
             logger.error(f"获取小说 '{book_url}' 的章节列表失败。")
             return None
-
-        # 打印前几个章节，以便调试
-        logger.info(f"获取到章节列表（前5章）: {[chap['name'] for chap in chapters[:5]]}")
-
-        # 直接返回章节列表中的第一个章节，通常这就是小说的第一章
         first_chapter = chapters[0]
         logger.info(f"找到第一章: {first_chapter['name']}")
         return first_chapter
@@ -143,6 +158,7 @@ class LegadoNovelPlugin(Star):
             if not random_category:
                 return None
 
+            # random_book 现在直接包含了准确的作者和分类信息
             random_book = await self._get_random_book_from_category(random_category['url'])
             if not random_book:
                 return None
@@ -156,8 +172,9 @@ class LegadoNovelPlugin(Star):
             return {
                 "name": random_book["name"],
                 "author": random_book["author"],
+                "category": random_book["category"],
                 "title": chapter_content.get("title"),
-                "text": chapter_content.get("content")
+                "text": chapter_content.get("content"),
             }
 
         except Exception as e:
@@ -167,7 +184,7 @@ class LegadoNovelPlugin(Star):
     @filter.command("随机小说")
     async def random_novel(self, event: AstrMessageEvent, text: str = ""):
         '''随机发送一本小说第一章的图片'''
-        yield event.plain_result("正在随机寻找一本小说，请稍候...") # 提供即时反馈
+        yield event.plain_result("正在随机寻找一本小说，请稍候...")
         book_data = await self.get_random_novel_chapter()
         
         if not book_data:
@@ -175,12 +192,10 @@ class LegadoNovelPlugin(Star):
             return
         
         from bs4 import BeautifulSoup
-        text_content = BeautifulSoup(book_data["text"], "html.parser").get_text("\n")
+        text_content = BeautifulSoup(book_data.get("text", ""), "html.parser").get_text("\n")
         
-        # 使用正则表达式去除指定文本
         text_content = re.sub(r"（本章未完，请点击下一页继续阅读）\n", "", text_content)
-        # 移除正文中的章节标题，例如“第1章 标题”
-        text_content = re.sub(r"^第\d+章\s+.*?\n", "", text_content, flags=re.MULTILINE)
+        text_content = re.sub(r"^\s*第[一二三四五六七八九十百千万零〇\d]+章.*?\n", "", text_content, flags=re.MULTILINE)
         
         paragraphs = [p.strip() for p in text_content.split("\n") if p.strip()]
         
@@ -200,6 +215,11 @@ class LegadoNovelPlugin(Star):
     async def novel_info(self, event: AstrMessageEvent, text: str = ""):
         '''获取上一本随机小说的信息'''
         if self.last_sent:
-            yield event.plain_result(f"书名：《{self.last_sent['name']}》\n作者：{self.last_sent['author']}")
+            category_info = self.last_sent.get('category', '未知')
+            yield event.plain_result(
+                f"书名：《{self.last_sent['name']}》\n"
+                f"分类：{category_info}\n"
+                f"作者：{self.last_sent['author']}"
+            )
         else:
             yield event.plain_result("暂无小说信息，请先发送 /随机小说")
