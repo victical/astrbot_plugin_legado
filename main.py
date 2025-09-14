@@ -1,5 +1,6 @@
 import random
 import json
+import re
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api import logger
@@ -31,17 +32,6 @@ NOVEL_TEMPLATE = """
             width: 100%; /* 确保容器占满可用宽度 */
             box-sizing: border-box;
         }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .meta {
-            text-align: center;
-            color: #888;
-            font-size: 16px;
-            margin-bottom: 30px;
-        }
         p {
             font-size: 22px;
             line-height: 1.8;
@@ -56,10 +46,6 @@ NOVEL_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>{{ title }}</h1>
-        <div class="meta">
-            <span>{{ book_name }}</span> / <span>{{ author }}</span>
-        </div>
         {% for paragraph in paragraphs %}
             <p>{{ paragraph }}</p>
         {% endfor %}
@@ -85,8 +71,9 @@ class LegadoNovelPlugin(Star):
         default_rules = {
             "ruleSearch": {"author": "p@text##.*</a>", "bookList": ".cover p.line", "bookUrl": "a@href", "name": "a@text"},
             "ruleToc": {"chapterList": ".chapter li", "chapterName": "a@text", "chapterUrl": "a@href"},
-            "ruleContent": {"content": "id.nr1@html##{{chapter.title}}.*|最新网址：3g\\.shugelou\\.org", "nextContentUrl": "id.pt_next@href", "replaceRegex": "##\n（本章未完，请点击下一页继续阅读）\\n", "title": "id._bqgmb_h1@text"},
-            "ruleFind": {"findList": ".content li", "findName": "a@text", "findUrl": "a@href"}
+            "ruleContent": {"content": "id.nr1@html##{{chapter.title}}.*|最新网址：3g\\.shugelou\\.org", "nextContentUrl": "id.pt_next@href", "replaceRegex": "（本章未完，请点击下一页继续阅读）\\n", "title": "id._bqgmb_h1@text"},
+            "ruleFind": {"findList": ".content li", "findName": "a@text", "findUrl": "a@href"},
+            "ruleBookInfo": {"intro": "div.intro@text"}
         }
         
         try:
@@ -139,16 +126,11 @@ class LegadoNovelPlugin(Star):
             logger.error(f"获取小说 '{book_url}' 的章节列表失败。")
             return None
 
-        first_chapter = None
-        import re
-        for chap in chapters:
-            if re.search(r"第[一1]章", chap["name"]):
-                first_chapter = chap
-                break
-        
-        if not first_chapter:
-            first_chapter = chapters[0]
-        
+        # 打印前几个章节，以便调试
+        logger.info(f"获取到章节列表（前5章）: {[chap['name'] for chap in chapters[:5]]}")
+
+        # 直接返回章节列表中的第一个章节，通常这就是小说的第一章
+        first_chapter = chapters[0]
         logger.info(f"找到第一章: {first_chapter['name']}")
         return first_chapter
 
@@ -194,6 +176,12 @@ class LegadoNovelPlugin(Star):
         
         from bs4 import BeautifulSoup
         text_content = BeautifulSoup(book_data["text"], "html.parser").get_text("\n")
+        
+        # 使用正则表达式去除指定文本
+        text_content = re.sub(r"（本章未完，请点击下一页继续阅读）\n", "", text_content)
+        # 移除正文中的章节标题，例如“第1章 标题”
+        text_content = re.sub(r"^第\d+章\s+.*?\n", "", text_content, flags=re.MULTILINE)
+        
         paragraphs = [p.strip() for p in text_content.split("\n") if p.strip()]
         
         template_data = {

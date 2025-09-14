@@ -30,7 +30,7 @@ class BookSourceParser:
             else:
                 resp = await self.client.get(url, headers=headers)
             resp.raise_for_status()  # 检查HTTP响应状态
-            resp.encoding = resp.apparent_encoding
+            # httpx 会自动处理编码，无需手动设置 apparent_encoding
             return resp.text
         except httpx.RequestError as e:
             logger.warning(f"网络请求失败: {e}")
