@@ -54,7 +54,7 @@ NOVEL_TEMPLATE = """
 </html>
 """
 
-@register("astrbot_plugin_legado", "Victical", "随机小说插件", "0.0.2", "https://github.com/victical/astrbot_plugin_legado")
+@register("astrbot_plugin_legado", "Victical", "随机小说插件", "0.0.1", "https://github.com/victical/astrbot_plugin_legado")
 class LegadoNovelPlugin(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
@@ -81,12 +81,12 @@ class LegadoNovelPlugin(Star):
             logger.error("解析书源规则失败，将使用默认规则。")
             self.rule = default_rules
 
-        # 在这里将 AstrBot 的 logger 传递给 BookSourceParser 实例
-        self.parser = BookSourceParser(self.rule, self.site_url, self.user_agent, logger=logger)
+        self.parser = BookSourceParser(self.rule, self.site_url, self.user_agent)
         self.last_sent = None
 
     async def _get_random_category(self):
         logger.info("开始获取小说分类...")
+        logger.info(f"分类页面URL: {self.find_url}")
         categories = await self.parser.parse_find(self.find_url)
         if not categories:
             logger.error("获取分类失败。")
@@ -96,7 +96,12 @@ class LegadoNovelPlugin(Star):
         return random_category
 
     async def _get_random_book_from_category(self, category_url: str):
+        logger.info(f"正在获取分类下的小说列表: {category_url}")
         html = await self.parser.get_html(category_url)
+        if not html:
+            logger.error(f"无法获取分类页面内容: {category_url}")
+            return None
+            
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
         
@@ -104,7 +109,9 @@ class LegadoNovelPlugin(Star):
         book_list_selector = rule_search.get("bookList")
         books = []
         if book_list_selector:
+            logger.info(f"使用书籍列表选择器: {book_list_selector}")
             items = soup.select(book_list_selector)
+            logger.info(f"找到 {len(items)} 本书籍项")
             for item in items:
                 name = self.parser._select(item, rule_search.get("name"))
                 book_url = self.parser._select(item, rule_search.get("bookUrl"))
@@ -132,16 +139,23 @@ class LegadoNovelPlugin(Star):
                 if book_url and not book_url.startswith("http"):
                     book_url = self.parser._resolve_url(book_url)
                 
-                books.append({"name": name, "url": book_url, "author": author, "category": category})
+                if name and book_url:
+                    books.append({"name": name, "url": book_url, "author": author, "category": category})
+                    logger.debug(f"解析到书籍: {name}, 作者: {author}, 分类: {category}")
+                else:
+                    logger.debug(f"书籍信息不完整，跳过。名称: {name}, URL: {book_url}")
         
         if not books:
             logger.error(f"在分类 '{category_url}' 下未找到任何小说。")
+            # 打印部分HTML用于调试
+            logger.info(f"页面内容预览: {html[:1000]}")
             return None
         random_book = random.choice(books)
         logger.info(f"随机选择小说: {random_book['name']} (作者: {random_book['author']}, 分类: {random_book['category']})")
         return random_book
 
     async def _get_first_chapter_from_book(self, book_url: str):
+        logger.info(f"正在获取书籍目录: {book_url}")
         chapters = await self.parser.parse_toc(book_url)
         if not chapters:
             logger.error(f"获取小说 '{book_url}' 的章节列表失败。")
@@ -151,21 +165,25 @@ class LegadoNovelPlugin(Star):
         return first_chapter
 
     async def _get_chapter_content(self, chapter_url: str):
+        logger.info(f"正在获取章节内容: {chapter_url}")
         return await self.parser.parse_content(chapter_url)
 
     async def get_random_novel_chapter(self):
         try:
             random_category = await self._get_random_category()
             if not random_category:
+                logger.error("无法获取随机分类")
                 return None
 
             # random_book 现在直接包含了准确的作者和分类信息
             random_book = await self._get_random_book_from_category(random_category['url'])
             if not random_book:
+                logger.error("无法获取随机书籍")
                 return None
 
             first_chapter = await self._get_first_chapter_from_book(random_book['url'])
             if not first_chapter:
+                logger.error("无法获取第一章")
                 return None
 
             chapter_content = await self._get_chapter_content(first_chapter['url'])
@@ -179,7 +197,7 @@ class LegadoNovelPlugin(Star):
             }
 
         except Exception as e:
-            logger.error(f"获取随机小说时发生错误: {e}", exc_info=e)
+            logger.error(f"获取随机小说时发生错误: {e}", exc_info=True)
             return None
 
     @filter.command("随机小说")
@@ -189,7 +207,7 @@ class LegadoNovelPlugin(Star):
         book_data = await self.get_random_novel_chapter()
         
         if not book_data:
-            yield event.plain_result("获取小说失败，请稍后再试。")
+            yield event.plain_result("获取小说失败，请稍后再试。\n\n可能的原因:\n1. 网络连接问题\n2. 目标网站暂时不可用\n3. 网站结构发生变化，需要更新解析规则\n4. 反爬虫机制阻止了请求\n\n建议:\n- 稍后再试\n- 联系插件开发者更新配置")
             return
         
         from bs4 import BeautifulSoup
